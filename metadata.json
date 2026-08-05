@@ -1,0 +1,6 @@
+{
+  "name": "Scanner de Rede Local Linux",
+  "description": "Mapeador de dispositivos na rede local com varredura de portas abertas (Nmap), detecção de fabricantes e alertas de novos dispositivos desconhecidos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Tactile Neo-Brutalist Button Hover Displacement Effects */
+  .btn-neo {
+    @apply font-bold border-2 border-slate-900 rounded-xl transition-all duration-150 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[5px_5px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] cursor-pointer select-none disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-neo-dark {
+    @apply font-bold border-2 border-slate-700 rounded-xl transition-all duration-150 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[5px_5px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[1px_1px_0px_0px_rgba(0,0,0,0.8)] cursor-pointer select-none disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  /* Tactile Card / Container Styling */
+  .card-neo-light {
+    @apply bg-white border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] rounded-2xl;
+  }
+
+  .card-neo-dark {
+    @apply bg-slate-900 border-2 border-slate-700/80 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.8)] rounded-2xl;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+
+/* Subtle fade animation on container backgrounds during theme toggles */
+body, main, header, div, section, card, button {
+  transition: background-color 250ms ease-in-out, border-color 250ms ease-in-out, box-shadow 250ms ease-in-out, color 150ms ease-in-out;
+}
