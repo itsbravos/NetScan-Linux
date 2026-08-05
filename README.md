@@ -1,6 +1,6 @@
 # 📡 NetScan Linux
 
-**Mapeador de dispositivos de rede local com varredura de portas, terminal Nmap, auditoria de segurança assistida por IA e teste de velocidade — tudo em uma interface neo-brutalista construída com React + Express.**
+**Mapeador de dispositivos de rede local com varredura de portas, terminal Nmap, auditoria de segurança heurística e teste de velocidade — tudo em uma interface neo-brutalista construída com React + Express.**
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React_19-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -13,7 +13,7 @@
 
 ## Sobre o projeto
 
-**NetScan Linux** é um dashboard web para mapear e monitorar dispositivos conectados a uma rede local (LAN), com foco em ambientes Linux/self-hosted. A interface é dividida em abas (com atalhos de teclado `1`–`8`) que cobrem descoberta de dispositivos, topologia de rede, varredura de portas, um terminal estilo Nmap, um assistente de segurança com IA (Google Gemini), gerenciamento de whitelist/blacklist e um teste de velocidade de internet.
+**NetScan Linux** é um dashboard web para mapear e monitorar dispositivos conectados a uma rede local (LAN), com foco em ambientes Linux/self-hosted. A interface é dividida em abas (com atalhos de teclado `1`–`8`) que cobrem descoberta de dispositivos, topologia de rede, varredura de portas, um terminal estilo Nmap, um assistente de segurança heurístico, gerenciamento de whitelist/blacklist e um teste de velocidade de internet.
 
 O projeto foi criado no **Google AI Studio** e usa um backend Express que serve tanto a API quanto o bundle Vite/React.
 
@@ -26,8 +26,12 @@ O projeto foi criado no **Google AI Studio** e usa um backend Express que serve 
 - [Funcionalidades](#funcionalidades)
 - [Stack técnica](#stack-técnica)
 - [Como funciona por baixo dos panos](#como-funciona-por-baixo-dos-panos)
+- [Por que não dá para hospedar no GitHub Pages](#por-que-não-dá-para-hospedar-no-github-pages)
 - [Pré-requisitos](#pré-requisitos)
 - [Instalação e uso](#instalação-e-uso)
+- [Instalar no Windows](#instalar-no-windows)
+- [Instalar no Linux](#instalar-no-linux)
+- [Acessar pelo celular](#acessar-pelo-celular)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Scripts disponíveis](#scripts-disponíveis)
 - [Estrutura do projeto](#estrutura-do-projeto)
@@ -47,7 +51,7 @@ O projeto foi criado no **Google AI Studio** e usa um backend Express que serve 
 | 🌐 **Mapa da Topologia** | Visualização gráfica da rede em formato de grafo, conectando o roteador/gateway aos dispositivos descobertos. |
 | 🔌 **Scanner de Portas** | Varredura de portas TCP em um IP alvo específico, com catálogo de ~20 serviços comuns (SSH, HTTP, SMB, RDP, MySQL, MongoDB, Telnet, etc.) e nota de risco de segurança para cada porta aberta. |
 | 💻 **Terminal Nmap** | Interface estilo terminal que simula a saída de comandos `nmap` (ex: `-sV -O`) para o alvo selecionado. |
-| 🛡️ **Auditoria & Security Advisor** | Gera uma pontuação de segurança (0–100) e recomendações de mitigação para os dispositivos escaneados. Usa a **API do Google Gemini** (`gemini-2.5-flash`) quando uma `GEMINI_API_KEY` válida está configurada; caso contrário, cai automaticamente em um **motor heurístico local** (detecção de Telnet, SMB/NetBIOS, RDP, FTP sem criptografia, dispositivos não confiáveis, etc.). |
+| 🛡️ **Auditoria & Security Advisor** | Gera uma pontuação de segurança (0–100) e recomendações de mitigação para os dispositivos escaneados, usando um **motor heurístico local** (detecção de Telnet, SMB/NetBIOS, RDP, FTP sem criptografia, dispositivos não confiáveis, etc.). |
 | ✅ **Whitelist** | Gerenciamento de dispositivos marcados como confiáveis/conhecidos. |
 | ⚡ **Speedtest** | Teste de velocidade de download/upload/ping/jitter com histórico salvo localmente. |
 | 🚫 **Ignorados & Configurações** | Blacklist de IPs/MACs a ignorar nos alertas, tema claro/escuro, cor de destaque, alertas sonoros e notificações. |
@@ -75,7 +79,6 @@ Recursos transversais:
 **Backend**
 - [Express 4](https://expressjs.com/) servindo API REST + middleware Vite (dev) / arquivos estáticos (prod)
 - Node.js (`net`, `os`, `fs`) para probing de portas TCP e leitura de interfaces de rede
-- [`@google/genai`](https://www.npmjs.com/package/@google/genai) — integração opcional com Google Gemini para análise de segurança
 - Persistência em arquivos JSON (`/data`)
 
 **Build/Tooling**
@@ -91,7 +94,7 @@ Recursos transversais:
 - `POST /api/scan` — **híbrido**: sonda de fato portas TCP comuns em `127.0.0.1` (para refletir serviços reais rodando no host do servidor), mas o restante dos dispositivos da subnet é uma **lista mockada** gerada dinamicamente com o prefixo da subnet informada, para simular um ambiente doméstico típico (roteador, servidor, celulares, smart TV, câmera IP, impressora, etc).
 - `POST /api/scan/port` — **real** quando o alvo é `127.0.0.1`/`localhost` (conexões TCP reais); **simulado** para outros IPs.
 - `POST /api/nmap/exec` — **simulado**: retorna uma saída de terminal formatada como se fosse um `nmap -sV -O`, mas não invoca o binário `nmap`.
-- `POST /api/security/ai-analysis` — usa o **Gemini** de verdade se `GEMINI_API_KEY` estiver configurada; senão usa heurísticas locais baseadas nas portas/dispositivos recebidos.
+- `POST /api/security/ai-analysis` — **real**, roda heurísticas locais baseadas nas portas/dispositivos recebidos (sem dependência de serviços de IA externos).
 - **Speedtest** — simulado no frontend, com histórico persistido em `localStorage`.
 
 Para transformar isso em um scanner 100% real de LAN, os pontos de extensão naturais seriam:
@@ -101,11 +104,26 @@ Para transformar isso em um scanner 100% real de LAN, os pontos de extensão nat
 
 ---
 
+## Por que não dá para hospedar no GitHub Pages
+
+**GitHub Pages só serve arquivos estáticos** (HTML/CSS/JS puros) — ele não executa código de servidor. Este projeto **precisa** de um processo Node.js rodando (o `server.ts` com Express) para:
+
+- ler as interfaces de rede reais da máquina (`os.networkInterfaces()`);
+- abrir conexões TCP para sondar portas (`net.Socket`);
+- persistir dados em disco (`/data/*.json`).
+
+Nada disso é possível em um host puramente estático como o GitHub Pages. Se você fizer só o build do frontend (`vite build`) e subir a pasta `dist` para o Pages, a interface até carrega, mas **todas as chamadas para `/api/...` vão falhar** (não existe backend para responder).
+
+Além disso, faz sentido pensar assim: essa ferramenta escaneia a rede **da máquina onde ela está rodando**. Não existe "hospedar na nuvem" um scanner de LAN — ele precisa rodar fisicamente dentro (ou conectado) da rede que você quer mapear. Por isso o uso pretendido é sempre **local**: no seu PC Windows, num servidor Linux de casa, num Raspberry Pi, etc.
+
+Se seu objetivo é só **mostrar o projeto/portfólio** publicamente (sem funcionalidade real de scan), aí sim dá pra publicar o frontend estático em GitHub Pages, Vercel ou Netlify — mas nesse caso as abas que dependem da API (Dispositivos, Portas, Nmap, Auditoria) ficam quebradas. Para uma demo pública funcional de verdade, o caminho é hospedar o app completo (frontend + backend) em algo que rode Node.js, como Railway, Render, Fly.io ou uma VPS.
+
+---
+
 ## Pré-requisitos
 
 - [Node.js](https://nodejs.org/) 18+ (recomendado 20+)
 - [Bun](https://bun.sh/) (recomendado, já que o projeto usa `bun.lock`) **ou** `npm`/`pnpm`/`yarn`
-- (Opcional) Uma **chave de API do Google Gemini** para habilitar a análise de segurança por IA — obtenha em [Google AI Studio](https://aistudio.google.com/apikey)
 
 ---
 
@@ -120,9 +138,8 @@ cd NetScan-Linux
 bun install
 # ou: npm install
 
-# 3. Configure as variáveis de ambiente
+# 3. Configure as variáveis de ambiente (opcional)
 cp .env.example .env
-# edite o .env e adicione sua GEMINI_API_KEY (opcional)
 
 # 4. Rode em modo desenvolvimento
 bun run dev
@@ -145,13 +162,83 @@ O comando `build` compila o frontend com Vite e empacota o servidor Express com 
 
 ---
 
+## Instalar no Windows
+
+1. Instale o [Node.js LTS](https://nodejs.org/) (o instalador `.msi` já adiciona `node` e `npm` ao PATH).
+2. Instale o [Git para Windows](https://git-scm.com/download/win), se ainda não tiver.
+3. Abra o PowerShell ou o Prompt de Comando e rode:
+   ```powershell
+   git clone https://github.com/itsbravos/NetScan-Linux.git
+   cd NetScan-Linux
+   npm install
+   npm run dev
+   ```
+4. Acesse **http://localhost:3000** no navegador.
+
+> A detecção de interfaces de rede funciona nativamente no Windows (usa a API de rede do Node.js), mas o app foi pensado/testado com foco em ambiente Linux — algumas informações (ex: nomes de interface `eth0`) podem aparecer de forma diferente do Windows (`Ethernet`, `Wi-Fi`, etc). Funciona, mas a experiência "de casa" é a Linux.
+
+## Instalar no Linux
+
+O ambiente nativo do projeto. Em Debian/Ubuntu, por exemplo:
+
+```bash
+# Instale Node.js (via nvm é o mais simples)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+nvm install --lts
+
+# Clone e rode
+git clone https://github.com/itsbravos/NetScan-Linux.git
+cd NetScan-Linux
+npm install
+npm run dev
+```
+
+Para deixar rodando permanentemente em um servidor Linux (ex: um mini-PC ou Raspberry Pi que fica ligado 24/7 na rede), use um gerenciador de processos como o [`pm2`](https://pm2.keymetrics.io/):
+
+```bash
+npm run build
+npm install -g pm2
+pm2 start dist/server.cjs --name netscan
+pm2 save
+pm2 startup   # configura o pm2 para subir junto com o boot do sistema
+```
+
+## Acessar pelo celular
+
+Este projeto **não é um app nativo** (não existe `.apk`/`.ipa`) — é um painel web. Duas formas de usar no celular:
+
+**1. Acessar o painel do PC/servidor pelo navegador do celular (mais simples e recomendado)**
+
+Com o servidor rodando no seu PC ou Linux (via `npm run dev`/`npm run start`), e o celular conectado **na mesma rede Wi-Fi**:
+
+1. Descubra o IP local da máquina que está rodando o servidor (Windows: `ipconfig`; Linux: `ip a`).
+2. No navegador do celular, acesse `http://<IP-DA-MAQUINA>:3000` (ex: `http://192.168.1.100:3000`).
+
+Isso te dá o dashboard completo no celular, mas o scan continua refletindo a rede vista **pela máquina onde o servidor está rodando**, não pelo celular.
+
+**2. Rodar o servidor diretamente no Android via Termux (avançado)**
+
+Se quiser que o app escaneie a partir do próprio celular:
+
+```bash
+# Dentro do Termux (F-Droid)
+pkg install nodejs git
+git clone https://github.com/itsbravos/NetScan-Linux.git
+cd NetScan-Linux
+npm install
+npm run dev
+```
+
+Depois acesse `http://localhost:3000` no navegador do próprio celular. iOS não tem um ambiente equivalente ao Termux com suporte real a Node.js, então essa opção é só para Android.
+
+---
+
 ## Variáveis de ambiente
 
 Definidas em `.env` (veja `.env.example`):
 
 | Variável | Obrigatória | Descrição |
 |---|---|---|
-| `GEMINI_API_KEY` | Não | Chave da API do Google Gemini. Se ausente ou inválida, a auditoria de segurança usa o motor heurístico local automaticamente. |
 | `APP_URL` | Não | URL onde a aplicação está hospedada (usado para links/callbacks quando implantado, ex: em Cloud Run). |
 
 ---
@@ -224,7 +311,7 @@ Todos os endpoints são servidos pelo Express em `server.ts` sob o prefixo `/api
 | `GET` | `/api/history/events` | Lista o log de eventos de rede persistido. |
 | `POST` | `/api/history/events` | Adiciona um novo evento ao log. |
 | `DELETE` | `/api/history/events` | Limpa o log de eventos. |
-| `POST` | `/api/security/ai-analysis` | Gera pontuação de segurança e recomendações (Gemini se configurado, senão heurística local). |
+| `POST` | `/api/security/ai-analysis` | Gera pontuação de segurança e recomendações via motor heurístico local. |
 
 ---
 

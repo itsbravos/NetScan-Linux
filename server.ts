@@ -4,7 +4,6 @@ import os from "os";
 import net from "net";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 const PORT = 3000;
@@ -840,56 +839,11 @@ app.delete("/api/history/events", (req, res) => {
   res.json({ success: true });
 });
 
-// AI Cybersecurity Analysis via Gemini API or Built-in Security Engine
+// Cybersecurity Analysis via Built-in Heuristic Security Engine
 app.post("/api/security/ai-analysis", async (req, res) => {
   const { devices = [] } = req.body;
 
-  // First check if GEMINI_API_KEY is configured
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Você é um Especialista em Cibersegurança e Auditor de Redes Locais.
-Analise a seguinte lista de dispositivos e portas abertas mapeados na rede local Linux:
-
-${JSON.stringify(devices, null, 2)}
-
-Responda ESTRITAMENTE em formato JSON com o seguinte esquema:
-{
-  "score": number (0 a 100, onde 100 é ultra seguro e <50 é crítico),
-  "riskSummary": { "critical": number, "high": number, "medium": number, "low": number },
-  "recommendations": [
-    {
-      "id": string,
-      "title": string,
-      "severity": "critical" | "high" | "medium" | "low",
-      "description": string,
-      "affectedIp": string,
-      "mitigation": string
-    }
-  ]
-}
-Forneça todas as explicações em português do Brasil, claras e focadas em ação corretiva.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-        }
-      });
-
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        return res.json(parsed);
-      }
-    } catch (err) {
-      console.error("Gemini AI analysis error, falling back to heuristic engine:", err);
-    }
-  }
-
-  // Fallback: Comprehensive Heuristic Security Engine
+  // Heuristic Security Engine
   let criticalCount = 0;
   let highCount = 0;
   let mediumCount = 0;
