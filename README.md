@@ -31,6 +31,7 @@ O projeto foi criado no **Google AI Studio** e usa um backend Express que serve 
 - [Instalação e uso](#instalação-e-uso)
 - [Instalar no Windows](#instalar-no-windows)
 - [Instalar no Linux](#instalar-no-linux)
+- [App desktop (Electron)](#app-desktop-electron)
 - [Acessar pelo celular](#acessar-pelo-celular)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Scripts disponíveis](#scripts-disponíveis)
@@ -85,6 +86,10 @@ Recursos transversais:
 - [tsx](https://github.com/privatenumber/tsx) — execução TypeScript em dev
 - [esbuild](https://esbuild.github.io/) — bundle do servidor para produção
 - [Bun](https://bun.sh/) como gerenciador de pacotes (também compatível com `npm`)
+
+**Desktop (opcional)**
+- [Electron](https://www.electronjs.org/) — empacota o app web (frontend + servidor Express) em uma janela desktop nativa
+- [electron-builder](https://www.electron.build/) — gera instaladores (`.exe` NSIS no Windows, `AppImage`/`.deb` no Linux)
 
 ---
 
@@ -176,6 +181,8 @@ O comando `build` compila o frontend com Vite e empacota o servidor Express com 
 4. Acesse **http://localhost:3000** no navegador.
 
 > A detecção de interfaces de rede funciona nativamente no Windows (usa a API de rede do Node.js), mas o app foi pensado/testado com foco em ambiente Linux — algumas informações (ex: nomes de interface `eth0`) podem aparecer de forma diferente do Windows (`Ethernet`, `Wi-Fi`, etc). Funciona, mas a experiência "de casa" é a Linux.
+>
+> Prefere não usar terminal nenhum? Veja o [app desktop (Electron)](#app-desktop-electron) — gera um instalador `.exe` de clique duplo.
 
 ## Instalar no Linux
 
@@ -202,6 +209,36 @@ pm2 start dist/server.cjs --name netscan
 pm2 save
 pm2 startup   # configura o pm2 para subir junto com o boot do sistema
 ```
+
+## App desktop (Electron)
+
+Para quem prefere um "instalador de clique duplo" em vez de rodar comandos no terminal, o projeto também empacota o mesmo frontend + servidor Express dentro de uma janela desktop nativa via [Electron](https://www.electronjs.org/). Por baixo dos panos é o **mesmo** `server.ts` — o Electron só abre uma janela apontando para `http://localhost:3000` e gerencia o processo do servidor para você.
+
+**Testar em modo desenvolvimento:**
+
+```bash
+npm install
+npm run electron:dev
+```
+
+Isso sobe o servidor (`npm run dev`) e, quando ele responder, abre a janela do Electron automaticamente.
+
+**Gerar o instalador:**
+
+```bash
+# Windows (gera um .exe via NSIS em /release)
+npm run dist:win
+
+# Linux (gera AppImage e .deb em /release)
+npm run dist:linux
+
+# Ambos (usa a plataforma atual como padrão do electron-builder)
+npm run electron:build
+```
+
+Os pacotes gerados ficam na pasta `release/`. Depois de instalado, o app cria uma pasta `data/` (dispositivos confiáveis, alertas, histórico) dentro do próprio diretório de instalação — a mesma persistência em JSON usada na versão web.
+
+> ℹ️ Gerar os instaladores baixa os binários do Electron para cada plataforma (arquivos grandes) — é necessário ter conexão com a internet na primeira vez que rodar `electron-builder`. Ícones customizados podem ser adicionados depois em `electron/build/icon.ico` (Windows) e `electron/build/icon.png` (Linux), configurando os campos `win.icon`/`linux.icon` no bloco `build` do `package.json`.
 
 ## Acessar pelo celular
 
@@ -250,8 +287,12 @@ Definidas em `.env` (veja `.env.example`):
 | `dev` | Inicia o servidor Express + Vite (HMR) em modo desenvolvimento na porta 3000. |
 | `build` | Compila o frontend (Vite) e empacota o servidor (esbuild) para produção em `dist/`. |
 | `start` | Executa o build de produção (`dist/server.cjs`). |
-| `clean` | Remove os diretórios `dist` e `server.js` gerados. |
+| `clean` | Remove os diretórios `dist`, `server.js` e `release` gerados. |
 | `lint` | Roda a checagem de tipos do TypeScript (`tsc --noEmit`). |
+| `electron:dev` | Sobe o servidor e abre a janela do Electron em modo desenvolvimento. |
+| `electron:build` | Builda o app e empacota o instalador para a plataforma atual em `release/`. |
+| `dist:win` | Builda o app e gera o instalador `.exe` (NSIS) para Windows. |
+| `dist:linux` | Builda o app e gera `AppImage`/`.deb` para Linux. |
 
 ---
 
@@ -277,16 +318,18 @@ NetScan-Linux/
 │       ├── NetworkTopology.tsx  # Grafo de topologia da rede
 │       ├── PortScannerView.tsx  # Scanner de portas por IP
 │       ├── NmapTerminal.tsx     # Terminal simulado de comandos Nmap
-│       ├── SecurityAdvisor.tsx  # Auditoria de segurança (IA/heurística) + heatmap de tráfego
+│       ├── SecurityAdvisor.tsx  # Auditoria de segurança heurística + heatmap de tráfego
 │       ├── TrustedDevicesView.tsx    # Gerenciamento da whitelist
 │       ├── BlacklistSettingsView.tsx # Blacklist + configurações de tema/alertas
 │       ├── Speedtest.tsx        # Teste de velocidade
 │       └── PingSparkline.tsx    # Mini-gráfico de latência
+├── electron/
+│   └── main.cjs                 # Processo principal do Electron: sobe/gerencia o servidor e abre a janela
 ├── data/                        # (gerado em runtime) Persistência JSON: dispositivos confiáveis, alertas, histórico, eventos
 ├── .env.example                 # Exemplo de variáveis de ambiente
 ├── vite.config.ts               # Configuração do Vite + Tailwind
 ├── tsconfig.json                # Configuração do TypeScript
-└── package.json
+└── package.json                 # Scripts + configuração do electron-builder (bloco "build")
 ```
 
 ---
