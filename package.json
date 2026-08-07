@@ -1,7 +1,7 @@
 {
   "name": "netscan-linux",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Mapeador de dispositivos de rede local com varredura de portas, terminal Nmap e auditoria de seguranca.",
   "author": "itsbravos <itsbravos@users.noreply.github.com>",
   "type": "module",
