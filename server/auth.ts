@@ -4,7 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.NETSCAN_DATA_DIR || path.join(process.cwd(), "data");
 const ADMIN_AUTH_FILE = path.join(DATA_DIR, "admin_auth.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 
@@ -25,8 +25,12 @@ const sessions: Map<string, SessionRecord> = new Map();
 const loginAttempts: Map<string, { count: number; firstAttemptAt: number }> = new Map();
 
 function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error("Could not create data dir:", err);
   }
 }
 
@@ -87,13 +91,25 @@ async function bootstrapPassword() {
   // and print the plaintext exactly once so the operator can log in.
   const generated = generateRandomPassword();
   passwordHash = await bcrypt.hash(generated, 10);
-  fs.writeFileSync(ADMIN_AUTH_FILE, JSON.stringify({ passwordHash }, null, 2));
+
+  let persisted = true;
+  try {
+    fs.writeFileSync(ADMIN_AUTH_FILE, JSON.stringify({ passwordHash }, null, 2));
+  } catch (err) {
+    persisted = false;
+    console.error("Could not persist admin_auth.json:", err);
+  }
 
   console.log("\n" + "=".repeat(64));
   console.log("🔐 Senha de administrador gerada automaticamente para o NetScan:");
   console.log(`   ${generated}`);
   console.log("   Guarde esta senha — ela não será exibida novamente.");
-  console.log("   Para redefinir, apague data/admin_auth.json e reinicie o servidor.");
+  if (persisted) {
+    console.log("   Para redefinir, apague data/admin_auth.json e reinicie o servidor.");
+  } else {
+    console.log("   AVISO: não foi possível salvar o hash em disco — uma nova senha");
+    console.log("   será gerada a cada reinício até que o problema de permissão seja resolvido.");
+  }
   console.log("=".repeat(64) + "\n");
 }
 

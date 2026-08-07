@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "description": "Mapeador de dispositivos de rede local com varredura de portas, terminal Nmap e auditoria de seguranca.",
-  "author": "itsbravos",
+  "author": "itsbravos <itsbravos@users.noreply.github.com>",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {

@@ -250,7 +250,7 @@ npm run dist:linux
 npm run electron:build
 ```
 
-Os pacotes gerados ficam na pasta `release/`. Depois de instalado, o app cria uma pasta `data/` (dispositivos confiáveis, alertas, histórico) dentro do próprio diretório de instalação — a mesma persistência em JSON usada na versão web.
+Os pacotes gerados ficam na pasta `release/`. Como um `.deb`/AppImage instalado costuma ficar em um diretório sem permissão de escrita para o usuário comum (ex: `/opt`), o Electron aponta a persistência para a pasta de dados do usuário (`~/.config/NetScan Linux/data` no Linux) em vez do diretório de instalação — mesma persistência em JSON usada na versão web, só que em um local sempre gravável.
 
 > ℹ️ Gerar os instaladores baixa os binários do Electron para cada plataforma (arquivos grandes) — é necessário ter conexão com a internet na primeira vez que rodar `electron-builder`. Ícones customizados podem ser adicionados depois em `electron/build/icon.ico` (Windows) e `electron/build/icon.png` (Linux), configurando os campos `win.icon`/`linux.icon` no bloco `build` do `package.json`.
 

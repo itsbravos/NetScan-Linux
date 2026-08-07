@@ -57,7 +57,7 @@ app.get("/api/auth/status", (req, res) => {
 app.use("/api", requireAuth);
 
 // Simple file-backed storage for persistence
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.NETSCAN_DATA_DIR || path.join(process.cwd(), "data");
 const TRUSTED_DEVICES_FILE = path.join(DATA_DIR, "trusted_devices.json");
 const SCAN_HISTORY_FILE = path.join(DATA_DIR, "scan_history.json");
 const ALERTS_FILE = path.join(DATA_DIR, "alerts.json");

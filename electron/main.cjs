@@ -37,9 +37,20 @@ function startServerIfPackaged() {
   const appDir = path.join(process.resourcesPath, "app");
   const serverPath = path.join(appDir, "dist", "server.cjs");
 
+  // A system-installed .deb/AppImage lives under a root-owned directory
+  // (e.g. /opt/NetScan Linux) — the app can't write its data/ folder there.
+  // Point persistence at the per-user, always-writable Electron userData dir
+  // instead (e.g. ~/.config/NetScan Linux/data on Linux).
+  const dataDir = path.join(app.getPath("userData"), "data");
+
   serverProcess = spawn(process.execPath, [serverPath], {
     cwd: appDir,
-    env: { ...process.env, NODE_ENV: "production", ELECTRON_RUN_AS_NODE: "1" },
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      ELECTRON_RUN_AS_NODE: "1",
+      NETSCAN_DATA_DIR: dataDir,
+    },
     stdio: "inherit",
   });
 
