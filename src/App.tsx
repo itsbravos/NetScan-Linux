@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Wifi, 
   ListFilter, 
@@ -25,6 +25,8 @@ import {
   AccentColor
 } from './types';
 import { Header } from './components/Header';
+import { LoginScreen } from './components/LoginScreen';
+import { apiFetch, setUnauthorizedHandler } from './lib/apiClient';
 import { AlertBanner } from './components/AlertBanner';
 import { DeviceList } from './components/DeviceList';
 import { NetworkTopology } from './components/NetworkTopology';
@@ -44,8 +46,10 @@ export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [alerts, setAlerts] = useState<NetworkAlert[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [selectedDeviceModal, setSelectedDeviceModal] = useState<Device | null>(null);
   const [targetNmapIp, setTargetNmapIp] = useState<string>('192.168.1.0/24');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
   // Keyboard shortcut listener (1-8 for tab navigation)
   useEffect(() => {
@@ -120,14 +124,26 @@ export default function App() {
     } catch (e) {}
   }, [scanConfig]);
 
-  // Save targetNmapIp to localStorage
+  // Save targetSubnet to localStorage — but only once real interface
+  // detection has completed at least once. Before that, scanConfig.targetSubnet
+  // still holds the hardcoded placeholder default, and writing it immediately
+  // would make fetchInterfaces() (which runs concurrently and checks this
+  // same key to decide whether the user has a saved preference) think the
+  // placeholder was a real saved choice — permanently pinning first-time
+  // users to a subnet that doesn't exist on their network instead of the one
+  // actually detected. Gated on state (not a ref/call-counter) because React
+  // StrictMode double-invokes this effect synchronously on mount, before any
+  // state change — a counter that just skips "the first call" still lets the
+  // second, still-stale-value call through.
+  const [interfacesLoaded, setInterfacesLoaded] = useState(false);
   useEffect(() => {
+    if (!interfacesLoaded) return;
     try {
       if (scanConfig.targetSubnet) {
         localStorage.setItem('netscan_target_subnet', scanConfig.targetSubnet);
       }
     } catch (e) {}
-  }, [scanConfig.targetSubnet]);
+  }, [scanConfig.targetSubnet, interfacesLoaded]);
 
   // Helper to map theme accent color to Tailwind bg class
   const getAccentBgClass = (accent: AccentColor) => {
@@ -157,38 +173,46 @@ export default function App() {
   const accentBgClass = getAccentBgClass(themeConfig.accent);
   const accentTextClass = getAccentTextClass(themeConfig.accent);
 
-  // Fetch Network Interfaces
-  const fetchInterfaces = async () => {
+  // Fetch Network Interfaces. Returns the detected default subnet so callers
+  // (namely the initial-load effect) don't have to rely on React state that
+  // hasn't re-rendered yet — `interfaces`/`scanConfig` inside a closure
+  // captured before this promise resolves would still read the stale value.
+  const fetchInterfaces = async (): Promise<string | undefined> => {
     try {
-      const res = await fetch('/api/network/interfaces');
+      const res = await apiFetch('/api/network/interfaces');
       const data = await res.json();
       if (data.interfaces && data.interfaces.length > 0) {
         setInterfaces(data.interfaces);
         const def = data.interfaces.find((i: any) => i.isDefault) || data.interfaces[0];
         setSelectedInterface(def.name);
-        
+
         // Preserve user-defined targetSubnet if saved in localStorage
         const savedSubnet = localStorage.getItem('netscan_target_subnet');
+        setInterfacesLoaded(true);
         if (!savedSubnet) {
           setScanConfig((prev) => ({ ...prev, targetSubnet: def.subnet }));
           setTargetNmapIp(def.subnet);
+          return def.subnet;
         } else {
           setTargetNmapIp(savedSubnet);
+          return savedSubnet;
         }
       }
     } catch (err) {
       console.error("Error loading network interfaces:", err);
     }
+    return undefined;
   };
 
   // Perform Scan
-  const handleStartScan = async (scanType: 'quick' | 'full' = 'quick', forceNew = false) => {
+  const handleStartScan = async (scanType: 'quick' | 'full' = 'quick', forceNew = false, subnetOverride?: string) => {
     setIsScanning(true);
+    setScanError(null);
     try {
       const currentIface = interfaces.find((i) => i.name === selectedInterface);
-      const subnetToScan = currentIface ? currentIface.subnet : scanConfig.targetSubnet;
+      const subnetToScan = subnetOverride || (currentIface ? currentIface.subnet : scanConfig.targetSubnet);
 
-      const res = await fetch('/api/scan', {
+      const res = await apiFetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -199,6 +223,12 @@ export default function App() {
       });
 
       const data = await res.json();
+
+      if (!res.ok) {
+        setScanError(data.error || 'Falha ao escanear a rede.');
+        return;
+      }
+
       if (data.devices) {
         setDevices(data.devices);
         setAlerts(data.alerts || []);
@@ -213,16 +243,55 @@ export default function App() {
       }
     } catch (err) {
       console.error("Error executing network scan:", err);
+      setScanError('Não foi possível conectar ao servidor para escanear a rede.');
     } finally {
       setIsScanning(false);
     }
   };
 
-  // Initial Load
+  // Register the global 401 handler once, so any protected fetch drops the
+  // user back to the login screen if the session expires mid-use.
   useEffect(() => {
-    fetchInterfaces();
-    handleStartScan('quick');
+    setUnauthorizedHandler(() => setIsAuthenticated(false));
+    return () => setUnauthorizedHandler(null);
   }, []);
+
+  // Check session on mount
+  useEffect(() => {
+    fetch('/api/auth/status')
+      .then((res) => res.json())
+      .then((data) => setIsAuthenticated(!!data.authenticated))
+      .catch(() => setIsAuthenticated(false));
+  }, []);
+
+  // Initial Load (only once authenticated). Await the detected subnet before
+  // scanning — firing both in parallel would scan the stale default subnet
+  // instead of the real one detected from this machine's interfaces. Guarded
+  // by a ref because React StrictMode double-invokes effects in dev; two
+  // concurrent real scans race and whichever /api/scan response lands last
+  // (not necessarily the "better" one) wins, sometimes clobbering good
+  // results with an empty one. A mock scan never showed this since every
+  // response looked equally "valid".
+  const initialLoadRanRef = useRef(false);
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    if (initialLoadRanRef.current) return;
+    initialLoadRanRef.current = true;
+    (async () => {
+      const detectedSubnet = await fetchInterfaces();
+      handleStartScan('quick', false, detectedSubnet);
+    })();
+  }, [isAuthenticated]);
+
+  const handleLogout = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error("Error logging out:", err);
+    } finally {
+      setIsAuthenticated(false);
+    }
+  };
 
   // Auto Scan Interval Timer
   useEffect(() => {
@@ -242,7 +311,7 @@ export default function App() {
   const handleToggleTrust = async (device: Device) => {
     const newTrustStatus = !device.isTrusted;
     try {
-      await fetch('/api/devices/trust', {
+      await apiFetch('/api/devices/trust', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -281,7 +350,7 @@ export default function App() {
       const targetDev = devices.find((d) => d.mac === mac);
       if (!targetDev) return;
 
-      await fetch('/api/devices/trust', {
+      await apiFetch('/api/devices/trust', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -305,7 +374,7 @@ export default function App() {
   // Clear Alerts
   const handleClearAlerts = async () => {
     try {
-      await fetch('/api/alerts/read', { method: 'POST' });
+      await apiFetch('/api/alerts/read', { method: 'POST' });
       setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
     } catch (err) {
       console.error("Error clearing alerts:", err);
@@ -315,6 +384,20 @@ export default function App() {
   const untrustedDevices = devices.filter((d) => !d.isTrusted && !d.isIgnored);
   const highRiskCount = devices.filter((d) => d.riskLevel === 'high' || d.riskLevel === 'critical').length;
   const isLight = themeConfig.mode === 'light';
+
+  if (isAuthenticated === null) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center font-sans transition-colors duration-200 ${
+        isLight ? 'bg-[#f8f6f0] text-slate-900' : 'bg-[#090d16] text-slate-100'
+      }`}>
+        <span className="text-sm font-mono opacity-60">Carregando...</span>
+      </div>
+    );
+  }
+
+  if (isAuthenticated === false) {
+    return <LoginScreen themeMode={themeConfig.mode} onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className={`min-h-screen flex flex-col font-sans antialiased selection:bg-sky-500 selection:text-white transition-colors duration-200 ${
@@ -343,6 +426,7 @@ export default function App() {
         themeConfig={themeConfig}
         onToggleThemeMode={() => setThemeConfig((prev) => ({ ...prev, mode: prev.mode === 'dark' ? 'light' : 'dark' }))}
         onOpenSettings={() => setActiveTab('blacklist')}
+        onLogout={handleLogout}
         accentBgClass={accentBgClass}
       />
 
@@ -353,6 +437,18 @@ export default function App() {
         onInspect={(dev) => setSelectedDeviceModal(dev)}
         themeMode={themeConfig.mode}
       />
+
+      {/* Scan Error Banner */}
+      {scanError && (
+        <div className={`px-4 py-3 border-b-2 text-sm font-bold flex items-center justify-between gap-3 ${
+          themeConfig.mode === 'light'
+            ? 'bg-amber-100 border-amber-600 text-amber-950'
+            : 'bg-amber-950/90 border-amber-800 text-amber-100'
+        }`}>
+          <span>⚠️ {scanError}</span>
+          <button onClick={() => setScanError(null)} className="underline shrink-0">Fechar</button>
+        </div>
+      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">

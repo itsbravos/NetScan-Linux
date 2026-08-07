@@ -185,7 +185,7 @@ export const NetworkTopology: React.FC<NetworkTopologyProps> = ({
                     ) : (
                       <span className={`text-[9px] font-mono font-bold flex items-center gap-1 ${isLight ? 'text-slate-700' : 'text-emerald-400'}`}>
                         <Activity className="w-2.5 h-2.5 text-sky-500" />
-                        {device.latencyMs} ms
+                        {device.latencyMs >= 0 ? `${device.latencyMs} ms` : '—'}
                       </span>
                     )}
                   </div>

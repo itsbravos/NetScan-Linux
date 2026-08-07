@@ -13,6 +13,7 @@ import {
   MousePointerClick
 } from 'lucide-react';
 import { IgnoredDevice, ThemeConfig, ThemeMode, AccentColor } from '../types';
+import { apiFetch } from '../lib/apiClient';
 
 interface BlacklistSettingsViewProps {
   themeConfig: ThemeConfig;
@@ -35,7 +36,7 @@ export const BlacklistSettingsView: React.FC<BlacklistSettingsViewProps> = ({
   const fetchBlacklist = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/blacklist');
+      const res = await apiFetch('/api/blacklist');
       const data = await res.json();
       if (data.blacklist) {
         setBlacklist(data.blacklist);
@@ -59,7 +60,7 @@ export const BlacklistSettingsView: React.FC<BlacklistSettingsViewProps> = ({
     setSuccessMsg('');
 
     try {
-      const res = await fetch('/api/blacklist', {
+      const res = await apiFetch('/api/blacklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +86,7 @@ export const BlacklistSettingsView: React.FC<BlacklistSettingsViewProps> = ({
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch(`/api/blacklist/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/blacklist/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setBlacklist((prev) => prev.filter((item) => item.id !== id));
       }

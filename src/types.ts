@@ -25,6 +25,7 @@ export interface OpenPort {
 export interface Device {
   id: string;
   ip: string;
+  ipv6?: string[];
   mac: string;
   hostname: string;
   vendor: string;
@@ -38,6 +39,7 @@ export interface Device {
   notes?: string;
   openPorts: OpenPort[];
   riskLevel: RiskLevel;
+  /** -1 quando o dispositivo respondeu ARP/NDP mas não respondeu ICMP (ping). */
   latencyMs: number;
   pingHistory?: number[];
   osGuess?: string;
@@ -72,6 +74,8 @@ export interface NetworkInterfaceInfo {
   netmask: string;
   mac: string;
   subnet: string;
+  ipv6: string[];
+  subnetV6?: string;
   isDefault: boolean;
 }
 

@@ -80,8 +80,13 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
                 )}
               </h3>
               <p className={`text-xs font-mono font-bold ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-                {device.ip} ({device.mac})
+                {device.ip || 'Sem IPv4'} ({device.mac})
               </p>
+              {!!device.ipv6?.length && (
+                <p className={`text-[10px] font-mono truncate max-w-xs ${isLight ? 'text-slate-500' : 'text-slate-500'}`} title={device.ipv6.join(', ')}>
+                  IPv6: {device.ipv6[0]}{device.ipv6.length > 1 ? ` +${device.ipv6.length - 1}` : ''}
+                </p>
+              )}
             </div>
           </div>
 
@@ -109,7 +114,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
               <span className={`text-[10px] uppercase font-extrabold block ${isLight ? 'text-slate-600' : 'text-slate-500'}`}>Latência Ping</span>
               <span className={`font-extrabold text-sm flex items-center gap-1 mt-0.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
                 <Activity className="w-3.5 h-3.5 text-indigo-500" />
-                {device.latencyMs} ms
+                {device.latencyMs >= 0 ? `${device.latencyMs} ms` : '—'}
               </span>
             </div>
 

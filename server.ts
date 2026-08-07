@@ -1,14 +1,60 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import os from "os";
-import net from "net";
 import fs from "fs";
+import cookieParser from "cookie-parser";
 import { createServer as createViteServer } from "vite";
+import { probePort, normalizeIPv4Cidr, mapWithConcurrency } from "./server/netUtils";
+import { discoverDevices } from "./server/discovery";
+import { runNmap, getNmapStatus, NmapError } from "./server/nmapRunner";
+import {
+  initAuth,
+  attemptLogin,
+  destroySession,
+  isSessionValid,
+  requireAuth,
+  SESSION_COOKIE,
+  SESSION_MAX_AGE_MS,
+} from "./server/auth";
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+app.use(cookieParser());
+
+// --- Authentication routes (must be registered before the requireAuth gate) ---
+app.post("/api/auth/login", async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const { password } = req.body || {};
+
+  const result = await attemptLogin(ip, password || "");
+  if (!result.ok || !result.sessionId) {
+    res.status(result.rateLimited ? 429 : 401).json({ error: result.error || "Senha incorreta." });
+    return;
+  }
+
+  res.cookie(SESSION_COOKIE, result.sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: SESSION_MAX_AGE_MS,
+  });
+  res.json({ success: true });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  destroySession(req.cookies?.[SESSION_COOKIE]);
+  res.clearCookie(SESSION_COOKIE);
+  res.json({ success: true });
+});
+
+app.get("/api/auth/status", (req, res) => {
+  res.json({ authenticated: isSessionValid(req.cookies?.[SESSION_COOKIE]) });
+});
+
+// Every other /api/* route requires a valid session from this point on.
+app.use("/api", requireAuth);
 
 // Simple file-backed storage for persistence
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -220,73 +266,60 @@ loadData();
 // Get local network interfaces info
 app.get("/api/network/interfaces", (req, res) => {
   const interfaces = os.networkInterfaces();
-  const result: any[] = [];
+  const grouped = new Map<string, any>();
 
   for (const name of Object.keys(interfaces)) {
     const ifaceList = interfaces[name];
     if (!ifaceList) continue;
 
     for (const iface of ifaceList) {
-      if (iface.family === "IPv4") {
-        // Calculate subnet estimate
-        const ipParts = iface.address.split(".").map(Number);
-        const subnet = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}.0/24`;
+      if (iface.internal) continue;
 
-        result.push({
+      if (!grouped.has(name)) {
+        grouped.set(name, {
           name,
-          ip: iface.address,
-          netmask: iface.netmask,
+          ip: "",
+          netmask: "",
           mac: iface.mac,
-          subnet,
-          isDefault: !iface.internal,
+          subnet: "",
+          ipv6: [] as string[],
+          subnetV6: undefined as string | undefined,
+          isDefault: true,
         });
+      }
+      const entry = grouped.get(name);
+
+      if (iface.family === "IPv4") {
+        entry.ip = iface.address;
+        entry.netmask = iface.netmask;
+        entry.subnet = (iface.cidr && normalizeIPv4Cidr(iface.cidr)) || entry.subnet;
+      } else if (iface.family === "IPv6" && !iface.address.toLowerCase().startsWith("fe80")) {
+        entry.ipv6.push(iface.address);
+        if (!entry.subnetV6 && iface.cidr) {
+          entry.subnetV6 = iface.cidr;
+        }
       }
     }
   }
 
-  // If no external interface found, append standard LAN default for demonstration
-  if (result.length === 0 || !result.some((i) => !i.internal)) {
-    result.unshift({
+  let result = Array.from(grouped.values()).filter((i) => i.ip);
+
+  // If no external IPv4 interface found, append standard LAN default for demonstration
+  if (result.length === 0) {
+    result = [{
       name: "eth0",
       ip: "192.168.1.100",
       netmask: "255.255.255.0",
       mac: "70:85:c2:d4:ee:90",
       subnet: "192.168.1.0/24",
+      ipv6: [],
+      subnetV6: undefined,
       isDefault: true,
-    });
+    }];
   }
 
   res.json({ interfaces: result });
 });
-
-// Helper: Check single TCP port on target IP
-function probePort(ip: string, port: number, timeout = 600): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    let status = false;
-
-    socket.setTimeout(timeout);
-
-    socket.on("connect", () => {
-      status = true;
-      socket.destroy();
-    });
-
-    socket.on("timeout", () => {
-      socket.destroy();
-    });
-
-    socket.on("error", () => {
-      socket.destroy();
-    });
-
-    socket.on("close", () => {
-      resolve(status);
-    });
-
-    socket.connect(port, ip);
-  });
-}
 
 // Known common port descriptions and security notes
 const PORT_CATALOG: Record<number, { service: string; risk: 'safe' | 'low' | 'medium' | 'high' | 'critical'; note: string }> = {
@@ -317,133 +350,24 @@ app.post("/api/scan", async (req, res) => {
   const { targetSubnet = "192.168.1.0/24", scanType = "quick" } = req.body;
   const startTime = Date.now();
 
-  // Test local port scan on 127.0.0.1 and 0.0.0.0 for real active services first!
-  const realLocalOpenPorts: number[] = [];
-  const testPorts = [21, 22, 80, 443, 3000, 3306, 5432, 8080, 9000];
-  
-  for (const p of testPorts) {
-    const isOpen = await probePort("127.0.0.1", p, 200);
-    if (isOpen) realLocalOpenPorts.push(p);
-  }
-
-  // Base list of devices representing the target subnet
-  const baseSubnetPrefix = targetSubnet.split(".")[0] + "." + targetSubnet.split(".")[1] + "." + targetSubnet.split(".")[2];
-  
-  // Dynamic list representing realistic subnet environment
-  const mockDevices = [
-    {
-      ip: `${baseSubnetPrefix}.1`,
-      mac: "a4:12:42:89:11:01",
-      hostname: "router.lan",
-      vendor: "TP-Link Technologies",
-      deviceType: "router",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 3) + 1,
-      osGuess: "Linux 4.19 / OpenWrt RouterOS",
-      ports: [80, 443, 53]
-    },
-    {
-      ip: `${baseSubnetPrefix}.100`,
-      mac: "70:85:c2:d4:ee:90",
-      hostname: "linux-server-node.local",
-      vendor: "Dell Inc. / Cloud Host",
-      deviceType: "server",
-      status: "online",
-      latencyMs: 1,
-      osGuess: "Ubuntu Linux 22.04 LTS (Kernel 6.2)",
-      ports: realLocalOpenPorts.length > 0 ? realLocalOpenPorts : [22, 80, 443, 3000, 8080]
-    },
-    {
-      ip: `${baseSubnetPrefix}.105`,
-      mac: "b8:27:eb:aa:4f:21",
-      hostname: "raspberrypi-homeassistant",
-      vendor: "Raspberry Pi Foundation",
-      deviceType: "iot",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 8) + 2,
-      osGuess: "Raspbian / Debian 11",
-      ports: [22, 8080, 1883]
-    },
-    {
-      ip: `${baseSubnetPrefix}.112`,
-      mac: "bc:d0:74:1a:8b:99",
-      hostname: "Galaxy-S23-Ultra",
-      vendor: "Samsung Electronics",
-      deviceType: "mobile",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 25) + 5,
-      osGuess: "Android 14 / OneUI 6",
-      ports: []
-    },
-    {
-      ip: `${baseSubnetPrefix}.120`,
-      mac: "3c:22:fb:ee:74:02",
-      hostname: "LG-SmartTV-OLED",
-      vendor: "LG Electronics",
-      deviceType: "smart_tv",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 12) + 3,
-      osGuess: "webOS TV 8.0",
-      ports: [8001, 8080]
-    },
-    {
-      ip: `${baseSubnetPrefix}.135`,
-      mac: "30:cd:a7:89:bc:de",
-      hostname: "HP-LaserJet-Pro",
-      vendor: "HP Inc.",
-      deviceType: "printer",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 15) + 4,
-      osGuess: "HP JetDirect Firmware",
-      ports: [80, 443, 631, 9100]
-    },
-    {
-      ip: `${baseSubnetPrefix}.144`,
-      mac: "24:a0:74:33:10:ef",
-      hostname: "Security-Cam-FrontYard",
-      vendor: "Hangzhou Hikvision Digital Tech",
-      deviceType: "camera",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 10) + 2,
-      osGuess: "Embedded Linux Camera OS",
-      ports: [80, 554, 8000, 23] // Note: Telnet 23 open creates security alert!
-    },
-    {
-      ip: `${baseSubnetPrefix}.189`,
-      mac: "48:5f:99:a2:bb:11",
-      hostname: "iPhone-15-Pro-Desk",
-      vendor: "Apple Inc.",
-      deviceType: "mobile",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 18) + 4,
-      osGuess: "iOS 17.5",
-      ports: []
-    }
-  ];
-
-  // Occasionally simulate a new unknown device joining if requested or in deep scans
-  if (scanType === "full" || req.body.forceNewDevice) {
-    mockDevices.push({
-      ip: `${baseSubnetPrefix}.210`,
-      mac: "98:ed:5c:22:90:7f",
-      hostname: "DESCONHECIDO-DEV-3",
-      vendor: "Espressif Inc. (ESP32 Smart Device)",
-      deviceType: "iot",
-      status: "online",
-      latencyMs: Math.floor(Math.random() * 30) + 10,
-      osGuess: "FreeRTOS / ESP32 Microcontroller",
-      ports: [80, 23, 1883]
+  let discovered;
+  try {
+    discovered = await discoverDevices(targetSubnet, {
+      includeIpv6: true,
+      probeCommonPorts: scanType !== "ping_only",
     });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Falha ao escanear a rede." });
   }
 
   const nowIso = new Date().toISOString();
   let newDevicesCount = 0;
   let highRiskCount = 0;
 
-  const scannedDevices = mockDevices.map((dev) => {
+  const scannedDevices = discovered.map((dev) => {
     const macLower = dev.mac.toLowerCase();
     const ipLower = dev.ip.toLowerCase();
-    const isIgnored = ignoredDevices.has(macLower) || ignoredDevices.has(ipLower);
+    const isIgnored = ignoredDevices.has(macLower) || (!!ipLower && ignoredDevices.has(ipLower));
     const isTrusted = trustedDevices.has(macLower) || isIgnored;
     const trustedRecord = trustedDevices.get(macLower);
 
@@ -459,7 +383,7 @@ app.post("/api/scan", async (req, res) => {
           deviceId: macLower,
           deviceIp: dev.ip,
           deviceMac: dev.mac,
-          message: `🚨 Novo dispositivo desconhecido detectado na rede: IP ${dev.ip} (${dev.vendor})`,
+          message: `🚨 Novo dispositivo desconhecido detectado na rede: IP ${dev.ip || dev.ipv6[0] || "desconhecido"} (${dev.vendor})`,
           read: false,
         };
         alertsList.unshift(newAlert);
@@ -495,16 +419,10 @@ app.post("/api/scan", async (req, res) => {
       highRiskCount++;
     }
 
-    // Generate 10 ping history samples around current latencyMs
-    const baseLatency = dev.latencyMs;
-    const pingHistory = Array.from({ length: 10 }).map((_, i) => {
-      const delta = Math.floor(Math.random() * Math.max(3, Math.round(baseLatency * 0.4))) - Math.floor(Math.max(1, Math.round(baseLatency * 0.2)));
-      return Math.max(1, baseLatency + delta);
-    });
-
     return {
       id: macLower.replace(/:/g, "-"),
       ip: dev.ip,
+      ipv6: dev.ipv6,
       mac: dev.mac,
       hostname: dev.hostname,
       vendor: dev.vendor,
@@ -519,8 +437,7 @@ app.post("/api/scan", async (req, res) => {
       openPorts,
       riskLevel,
       latencyMs: dev.latencyMs,
-      pingHistory,
-      osGuess: dev.osGuess,
+      pingHistory: dev.pingHistory,
     };
   });
 
@@ -558,35 +475,26 @@ app.post("/api/scan", async (req, res) => {
 app.post("/api/scan/port", async (req, res) => {
   const { ip = "127.0.0.1", ports = [21, 22, 23, 80, 443, 445, 1433, 3306, 3389, 5432, 8080, 9000] } = req.body;
 
-  const results = [];
-  
-  for (const port of ports) {
-    // If scanning localhost or real accessible target IP, run real TCP socket check!
-    let isOpen = false;
-    if (ip === "127.0.0.1" || ip === "localhost") {
-      isOpen = await probePort("127.0.0.1", port, 250);
-    } else {
-      // For simulated LAN targets, align with realistic open port profile
-      const catalog = PORT_CATALOG[port];
-      const isCommonSimulatedOpen = [80, 443, 22, 53, 8080].includes(port);
-      isOpen = isCommonSimulatedOpen;
-    }
+  const target = ip === "localhost" ? "127.0.0.1" : ip;
+  const openStates = await mapWithConcurrency(ports, 16, (port: number) => probePort(target, port, 400));
 
+  const results = ports.map((port: number, idx: number) => {
+    const isOpen = openStates[idx];
     const catalog = PORT_CATALOG[port] || {
       service: `Custom (${port})`,
       risk: "low",
       note: "Porta não catalogada"
     };
 
-    results.push({
+    return {
       port,
       protocol: "tcp",
       state: isOpen ? "open" : "closed",
       service: catalog.service,
       risk: catalog.risk,
       securityNote: isOpen ? catalog.note : "Porta fechada/bloqueada no firewall.",
-    });
-  }
+    };
+  });
 
   res.json({
     targetIp: ip,
@@ -598,51 +506,26 @@ app.post("/api/scan/port", async (req, res) => {
 });
 
 // Nmap Terminal Command Executor & Output Generator
-app.post("/api/nmap/exec", (req, res) => {
-  const { command = "nmap -sV -O 192.168.1.0/24", targetIp = "192.168.1.1" } = req.body;
+app.get("/api/nmap/status", async (req, res) => {
+  const status = await getNmapStatus();
+  res.json(status);
+});
+
+app.post("/api/nmap/exec", async (req, res) => {
+  const { command = "", targetIp = "" } = req.body;
   const now = new Date();
-  const formattedTime = now.toLocaleDateString("pt-BR") + " " + now.toLocaleTimeString("pt-BR");
 
-  let stdout = `Starting Nmap 7.94 ( https://nmap.org ) at ${formattedTime} UTC
-NSE: Loaded 155 scripts for scanning.
-Initiating ARP Ping Scan at ${now.toLocaleTimeString("pt-BR")}
-Scanning 256 hosts [1 port/host]
-Completed ARP Ping Scan at ${now.toLocaleTimeString("pt-BR")}, 0.85s elapsed (256 total hosts)
-
-Nmap scan report for router.lan (${targetIp})
-Host is up (0.0018s latency).
-Not shown: 996 closed tcp ports (reset)
-PORT     STATE SERVICE    VERSION
-22/tcp   open  ssh        OpenSSH 8.9p1 Ubuntu 3ubuntu0.6 (Ubuntu Linux; protocol 2.0)
-53/tcp   open  domain     dnsmasq 2.86
-80/tcp   open  http       lighttpd 1.4.63
-443/tcp  open  ssl/https  lighttpd 1.4.63
-MAC Address: A4:12:42:89:11:01 (TP-Link Technologies Co., Ltd.)
-Device type: general purpose | router
-Running: Linux 4.X|5.X
-OS CPE: cpe:/o:linux:linux_kernel:4 cpe:/o:linux:linux_kernel:5
-OS details: Linux 4.19 or Linux 5.4 OpenWrt
-Network Distance: 1 hop
-
-Nmap scan report for linux-server.local (${targetIp.endsWith(".1") ? "192.168.1.100" : targetIp})
-Host is up (0.0004s latency).
-PORT     STATE SERVICE    VERSION
-22/tcp   open  ssh        OpenSSH 9.0 (protocol 2.0)
-80/tcp   open  http       Nginx 1.24.0
-443/tcp  open  ssl/https  Nginx 1.24.0
-3000/tcp open  ppp?       Node.js Express App (AI Studio Container)
-8080/tcp open  http-proxy Traefik Proxy 2.10
-MAC Address: 70:85:C2:D4:EE:90 (Dell Inc.)
-OS details: Ubuntu 22.04 LTS Linux Server
-
-Nmap done: 256 IP addresses (8 hosts up) scanned in 4.32 seconds
-`;
-
-  res.json({
-    command,
-    timestamp: now.toISOString(),
-    rawStdout: stdout,
-  });
+  try {
+    const { stdout, stderr } = await runNmap(command, targetIp);
+    res.json({
+      command,
+      timestamp: now.toISOString(),
+      rawStdout: stdout + (stderr ? `\n${stderr}` : ""),
+    });
+  } catch (err: any) {
+    const statusCode = err instanceof NmapError ? err.statusCode : 500;
+    res.status(statusCode).json({ error: err?.message || "Falha ao executar nmap." });
+  }
 });
 
 // Update trusted status & details for a device
@@ -922,6 +805,8 @@ app.post("/api/security/ai-analysis", async (req, res) => {
 
 // Vite Middleware for development
 async function startServer() {
+  await initAuth();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

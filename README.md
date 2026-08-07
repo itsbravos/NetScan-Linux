@@ -17,7 +17,7 @@
 
 O projeto foi criado no **Google AI Studio** e usa um backend Express que serve tanto a API quanto o bundle Vite/React.
 
-> ⚠️ **Nota de transparência:** este é um projeto de demonstração/portfólio. A varredura de portas em `127.0.0.1` é **real** (conexões TCP de fato testadas via `net.Socket`), assim como a detecção das interfaces de rede locais (via módulo `os` do Node). Porém, a lista de **dispositivos da LAN** retornada pelo endpoint `/api/scan`, o **terminal Nmap** e o **teste de velocidade** usam **dados simulados/mockados** para fins de demonstração da UI — não há varredura ARP real da rede nem execução do binário `nmap`. Veja a seção [Como funciona por baixo dos panos](#como-funciona-por-baixo-dos-panos) para detalhes e ideias de como torná-lo 100% funcional.
+> ⚠️ **Nota de transparência:** a descoberta de dispositivos, a execução do Nmap, o teste de velocidade e a autenticação são **reais** (não há mais dados mockados) — veja a seção [Como funciona por baixo dos panos](#como-funciona-por-baixo-dos-panos) para os detalhes técnicos e as limitações conhecidas de cada um (ex: o servidor roda sem privilégios de root, então alguns recursos do Nmap ficam degradados).
 
 ---
 
@@ -48,22 +48,24 @@ O projeto foi criado no **Google AI Studio** e usa um backend Express que serve 
 
 | Aba | Descrição |
 |---|---|
-| 🖥️ **Dispositivos** | Lista todos os dispositivos "descobertos" na subnet, com IP, MAC, hostname, fabricante (vendor), tipo de dispositivo, latência, histórico de ping e nível de risco. Permite marcar/desmarcar como confiável e editar apelido/notas. |
+| 🖥️ **Dispositivos** | Lista os dispositivos descobertos de fato na subnet (via ARP/NDP + ping sweep), com IP (IPv4 e IPv6), MAC, hostname (reverse DNS), fabricante (tabela OUI local), tipo de dispositivo, latência real, histórico de ping e nível de risco. Permite marcar/desmarcar como confiável e editar apelido/notas. |
 | 🌐 **Mapa da Topologia** | Visualização gráfica da rede em formato de grafo, conectando o roteador/gateway aos dispositivos descobertos. |
-| 🔌 **Scanner de Portas** | Varredura de portas TCP em um IP alvo específico, com catálogo de ~20 serviços comuns (SSH, HTTP, SMB, RDP, MySQL, MongoDB, Telnet, etc.) e nota de risco de segurança para cada porta aberta. |
-| 💻 **Terminal Nmap** | Interface estilo terminal que simula a saída de comandos `nmap` (ex: `-sV -O`) para o alvo selecionado. |
+| 🔌 **Scanner de Portas** | Varredura TCP real (via `net.Socket`) de portas em qualquer IP alvo da rede, com catálogo de ~20 serviços comuns (SSH, HTTP, SMB, RDP, MySQL, MongoDB, Telnet, etc.) e nota de risco de segurança para cada porta aberta. |
+| 💻 **Terminal Nmap** | Executa o binário `nmap` de verdade (via `child_process.execFile`, com whitelist de flags e validação de alvo) para o IP/subnet selecionado. |
 | 🛡️ **Auditoria & Security Advisor** | Gera uma pontuação de segurança (0–100) e recomendações de mitigação para os dispositivos escaneados, usando um **motor heurístico local** (detecção de Telnet, SMB/NetBIOS, RDP, FTP sem criptografia, dispositivos não confiáveis, etc.). |
 | ✅ **Whitelist** | Gerenciamento de dispositivos marcados como confiáveis/conhecidos. |
-| ⚡ **Speedtest** | Teste de velocidade de download/upload/ping/jitter com histórico salvo localmente. |
+| ⚡ **Speedtest** | Teste de velocidade real de Ping/Jitter/Download/Upload contra a rede da Cloudflare (`speed.cloudflare.com`), com histórico salvo localmente. |
 | 🚫 **Ignorados & Configurações** | Blacklist de IPs/MACs a ignorar nos alertas, tema claro/escuro, cor de destaque, alertas sonoros e notificações. |
 
 Recursos transversais:
+- 🔐 **Autenticação** por senha única de administrador (sessão via cookie `httpOnly`) protegendo todo o painel.
 - 🔔 Sistema de **alertas** para dispositivos novos/desconhecidos na rede, com som de notificação.
 - 📊 Linha do tempo (timeline) de 24h de dispositivos totais/confiáveis/não confiáveis/alto risco.
 - 📝 Log persistente de eventos de rede (conexões, mudanças de confiança, vulnerabilidades detectadas).
 - 💾 Persistência local em arquivos JSON (sem necessidade de banco de dados externo).
 - 🌗 Tema claro/escuro com paletas de cor de destaque customizáveis, estilo **neo-brutalista**.
 - ⌨️ Navegação completa por atalhos de teclado.
+- 🌐 Suporte a **IPv6** (descoberta best-effort via NDP, exibição de endereços múltiplos por dispositivo).
 
 ---
 
@@ -79,7 +81,8 @@ Recursos transversais:
 
 **Backend**
 - [Express 4](https://expressjs.com/) servindo API REST + middleware Vite (dev) / arquivos estáticos (prod)
-- Node.js (`net`, `os`, `fs`) para probing de portas TCP e leitura de interfaces de rede
+- Node.js (`net`, `os`, `fs`, `dns`, `child_process`) para probing de portas, descoberta ARP/NDP, reverse DNS e execução do `nmap`
+- [bcryptjs](https://github.com/dcodeIO/bcrypt.js) + [cookie-parser](https://github.com/expressjs/cookie-parser) para autenticação por sessão
 - Persistência em arquivos JSON (`/data`)
 
 **Build/Tooling**
@@ -95,17 +98,24 @@ Recursos transversais:
 
 ## Como funciona por baixo dos panos
 
-- `GET /api/network/interfaces` — **real**, lê as interfaces de rede do host via `os.networkInterfaces()`.
-- `POST /api/scan` — **híbrido**: sonda de fato portas TCP comuns em `127.0.0.1` (para refletir serviços reais rodando no host do servidor), mas o restante dos dispositivos da subnet é uma **lista mockada** gerada dinamicamente com o prefixo da subnet informada, para simular um ambiente doméstico típico (roteador, servidor, celulares, smart TV, câmera IP, impressora, etc).
-- `POST /api/scan/port` — **real** quando o alvo é `127.0.0.1`/`localhost` (conexões TCP reais); **simulado** para outros IPs.
-- `POST /api/nmap/exec` — **simulado**: retorna uma saída de terminal formatada como se fosse um `nmap -sV -O`, mas não invoca o binário `nmap`.
-- `POST /api/security/ai-analysis` — **real**, roda heurísticas locais baseadas nas portas/dispositivos recebidos (sem dependência de serviços de IA externos).
-- **Speedtest** — simulado no frontend, com histórico persistido em `localStorage`.
+- `GET /api/network/interfaces` — lê as interfaces de rede do host via `os.networkInterfaces()` (IPv4 e IPv6, com subnet calculada a partir do `cidr` nativo do Node).
+- `POST /api/scan` — descoberta real: um *ping sweep* (`child_process` + `ping`) popula a tabela ARP/NDP do kernel, que então é lida via `ip neigh show` (com fallback para `/proc/net/arp`). Hostname via reverse DNS, fabricante via tabela OUI local, tipo de dispositivo por heurística (vendor + se é o gateway padrão). IPv6 é descoberto via NDP (`ping` multicast em `ff02::1` + `ip -6 neigh show`), de forma best-effort.
+- `POST /api/scan/port` — varredura TCP real (`net.Socket`) contra qualquer IP informado.
+- `POST /api/nmap/exec` — executa o `nmap` de verdade via `child_process.execFile` (nunca shell), com uma **whitelist de flags** (`-sV`, `-O`, `-F`, `-sn`/`-sP`, `-p`, `-p-`, `-A`, `-Pn`, `-T0`–`-T5`, `--script` restrito a `vuln|default|safe|discovery`) e validação estrita do alvo — qualquer flag ou alvo fora da whitelist é rejeitado com HTTP 400, nunca repassado ao processo.
+- `POST /api/security/ai-analysis` — roda heurísticas locais baseadas nas portas/dispositivos recebidos (sem dependência de serviços de IA externos).
+- **Speedtest** — mede Ping/Jitter/Download/Upload reais no navegador contra os endpoints públicos `speed.cloudflare.com/__down` e `__up` (mesmo backend do speed.cloudflare.com), sem passar pelo servidor Express. Histórico persistido em `localStorage`.
+- **Autenticação** — senha única de admin com hash `bcryptjs`. Se nenhuma variável de ambiente for definida, uma senha é gerada automaticamente no primeiro boot e impressa **uma única vez** no console (hash persistido em `data/admin_auth.json`). Sessão via cookie `httpOnly` opaco, validado contra um store em memória persistido em `data/sessions.json` (expira em 7 dias). Rate limiting de 5 tentativas / 5 minutos por IP no login.
 
-Para transformar isso em um scanner 100% real de LAN, os pontos de extensão naturais seriam:
-1. Substituir a lista mockada em `/api/scan` por uma varredura ARP real (ex: via `arp -a`, `node-arp`, ou parsing de `/proc/net/arp` no Linux).
-2. Invocar o binário `nmap` de fato em `/api/nmap/exec` (via `child_process.exec`), com sanitização rigorosa do input do usuário para evitar injeção de comando.
-3. Implementar um teste de velocidade real (ex: contra um servidor de referência ou usando bibliotecas como `speedtest-net`).
+### Limitações conhecidas
+
+- **Sem privilégios de root**: o servidor roda como usuário normal. A descoberta ARP/NDP funciona sem root (lê a tabela do kernel), mas no Nmap a detecção de SO (`-O`) e scans SYN (`-sS`) ficam degradados ou indisponíveis — o app avisa isso na aba Terminal Nmap.
+- **Dispositivos que bloqueiam ICMP** ainda aparecem (a resolução ARP funciona por baixo do firewall do host), mas a latência é exibida como "sem resposta" (`—`).
+- **Dispositivos em suspensão de rede** (ex: celulares com Wi-Fi em deep sleep) podem não responder a tempo do scan e ficar de fora.
+- **Varredura limitada a `/22`** (1024 endereços) para não travar o processo em subnets muito grandes.
+- **Descoberta IPv6 é best-effort**: não enumera o `/64` inteiro, depende dos dispositivos responderem ao multicast NDP.
+- **Tabela de fabricantes (OUI)** é uma lista curada dos vendors mais comuns, não a base completa da IEEE — prefixos não reconhecidos aparecem como "Desconhecido" (isso também é esperado para dispositivos com MAC aleatório/privacy, comum em smartphones modernos).
+- **Sem TLS**: o servidor escuta em HTTP puro (`0.0.0.0:3000`), então a sessão de login trafega sem criptografia dentro da própria LAN. Use apenas em redes domésticas confiáveis.
+- **`nmap` precisa estar instalado no sistema** (`sudo apt install nmap` ou equivalente) — não é embutido no app nem no instalador Electron.
 
 ---
 
@@ -129,6 +139,8 @@ Se seu objetivo é só **mostrar o projeto/portfólio** publicamente (sem funcio
 
 - [Node.js](https://nodejs.org/) 18+ (recomendado 20+)
 - [Bun](https://bun.sh/) (recomendado, já que o projeto usa `bun.lock`) **ou** `npm`/`pnpm`/`yarn`
+- **Linux com `ping` e `ip` (iproute2)** disponíveis no PATH — usados para a descoberta real de dispositivos (ambos já vêm instalados na grande maioria das distros).
+- **`nmap`** instalado no sistema para a aba Terminal Nmap funcionar (`sudo apt install nmap` no Debian/Ubuntu, `sudo pacman -S nmap` no Arch, `sudo dnf install nmap` no Fedora). Sem ele, a aba mostra um aviso e a rota retorna erro 503 — o resto do app funciona normalmente.
 
 ---
 
@@ -152,6 +164,8 @@ bun run dev
 ```
 
 A aplicação sobe em **http://localhost:3000**.
+
+> 🔐 **Primeiro acesso:** se você não definiu `ADMIN_PASSWORD`/`ADMIN_PASSWORD_HASH` no `.env`, o servidor gera uma senha aleatória no primeiro boot e a imprime **uma única vez** no terminal (procure por `🔐 Senha de administrador gerada automaticamente`). Guarde-a — para redefinir, apague `data/admin_auth.json` e reinicie o servidor.
 
 ### Build para produção
 
@@ -277,6 +291,8 @@ Definidas em `.env` (veja `.env.example`):
 | Variável | Obrigatória | Descrição |
 |---|---|---|
 | `APP_URL` | Não | URL onde a aplicação está hospedada (usado para links/callbacks quando implantado, ex: em Cloud Run). |
+| `ADMIN_PASSWORD_HASH` | Não | Hash bcrypt pronto da senha de admin. Tem prioridade sobre `ADMIN_PASSWORD`. Recomendado em produção. |
+| `ADMIN_PASSWORD` | Não | Senha de admin em texto puro, hasheada automaticamente no boot. Se nenhuma das duas variáveis for definida, uma senha é gerada e impressa uma única vez no console. |
 
 ---
 
@@ -300,32 +316,42 @@ Definidas em `.env` (veja `.env.example`):
 
 ```
 NetScan-Linux/
-├── server.ts                    # Servidor Express: API REST + persistência em JSON + middleware Vite
+├── server.ts                    # Servidor Express: rotas API + persistência em JSON + middleware Vite
+├── server/
+│   ├── auth.ts                  # Bootstrap de senha, sessões, middleware requireAuth, rate limit de login
+│   ├── discovery.ts             # Ping sweep + leitura ARP/NDP (ip neigh / proc/net/arp) + reverse DNS
+│   ├── netUtils.ts               # probePort, aritmética de CIDR/IPv4, concorrência limitada
+│   ├── nmapRunner.ts             # Whitelist de flags + execFile do nmap real
+│   ├── ouiLookup.ts / ouiTable.json  # Tabela de fabricantes por prefixo MAC (OUI)
+│   └── targetValidation.ts      # Validação de IP/CIDR/hostname para nmap e discovery
 ├── index.html                   # Ponto de entrada HTML
 ├── src/
 │   ├── main.tsx                 # Bootstrap do React
-│   ├── App.tsx                  # Componente raiz: navegação por abas, estado global, polling de scan
+│   ├── App.tsx                  # Componente raiz: gate de autenticação, navegação por abas, estado global
 │   ├── index.css                # Estilos globais (Tailwind)
 │   ├── types.ts                 # Tipos TypeScript compartilhados (Device, ScanConfig, Alert, etc.)
 │   ├── lib/
-│   │   └── audioAlert.ts        # Reprodução de sons de alerta
+│   │   ├── audioAlert.ts        # Reprodução de sons de alerta
+│   │   ├── apiClient.ts         # Wrapper de fetch que trata sessão expirada (401)
+│   │   └── speedtestEngine.ts   # Medição real de ping/jitter/download/upload via Cloudflare
 │   └── components/
-│       ├── Header.tsx           # Cabeçalho, seleção de interface, controles de scan e alertas
+│       ├── Header.tsx           # Cabeçalho, seleção de interface, controles de scan, alertas e logout
+│       ├── LoginScreen.tsx      # Tela de login (senha de administrador)
 │       ├── AlertBanner.tsx      # Banner de dispositivos novos/desconhecidos
 │       ├── DeviceList.tsx       # Listagem e cards de dispositivos
 │       ├── DeviceCard.tsx       # Card individual de dispositivo
 │       ├── DeviceModal.tsx      # Modal de detalhes/edição de dispositivo
 │       ├── NetworkTopology.tsx  # Grafo de topologia da rede
 │       ├── PortScannerView.tsx  # Scanner de portas por IP
-│       ├── NmapTerminal.tsx     # Terminal simulado de comandos Nmap
+│       ├── NmapTerminal.tsx     # Terminal de comandos Nmap (execução real)
 │       ├── SecurityAdvisor.tsx  # Auditoria de segurança heurística + heatmap de tráfego
 │       ├── TrustedDevicesView.tsx    # Gerenciamento da whitelist
 │       ├── BlacklistSettingsView.tsx # Blacklist + configurações de tema/alertas
-│       ├── Speedtest.tsx        # Teste de velocidade
+│       ├── Speedtest.tsx        # Teste de velocidade real
 │       └── PingSparkline.tsx    # Mini-gráfico de latência
 ├── electron/
 │   └── main.cjs                 # Processo principal do Electron: sobe/gerencia o servidor e abre a janela
-├── data/                        # (gerado em runtime) Persistência JSON: dispositivos confiáveis, alertas, histórico, eventos
+├── data/                        # (gerado em runtime) Persistência JSON: dispositivos, alertas, histórico, sessões, senha admin
 ├── .env.example                 # Exemplo de variáveis de ambiente
 ├── vite.config.ts               # Configuração do Vite + Tailwind
 ├── tsconfig.json                # Configuração do TypeScript
@@ -336,14 +362,18 @@ NetScan-Linux/
 
 ## Referência da API
 
-Todos os endpoints são servidos pelo Express em `server.ts` sob o prefixo `/api`.
+Todos os endpoints são servidos pelo Express em `server.ts` sob o prefixo `/api`. Com exceção de `/api/auth/*`, **todas as rotas exigem sessão autenticada** (cookie de sessão) — sem ela, retornam `401`.
 
 | Método | Endpoint | Descrição |
 |---|---|---|
-| `GET` | `/api/network/interfaces` | Lista as interfaces de rede IPv4 do host. |
-| `POST` | `/api/scan` | Executa uma varredura da subnet (`targetSubnet`, `scanType: 'quick' \| 'full'`, `forceNewDevice`). Retorna dispositivos, resumo e alertas. |
-| `POST` | `/api/scan/port` | Varre uma lista de portas TCP em um IP alvo (`ip`, `ports`). |
-| `POST` | `/api/nmap/exec` | Retorna a saída simulada de um comando Nmap (`command`, `targetIp`). |
+| `POST` | `/api/auth/login` | Autentica com a senha de admin (`password`) e define o cookie de sessão. |
+| `POST` | `/api/auth/logout` | Encerra a sessão atual. |
+| `GET` | `/api/auth/status` | Retorna `{ authenticated: boolean }` (não exige sessão). |
+| `GET` | `/api/network/interfaces` | Lista as interfaces de rede do host (IPv4 e IPv6). |
+| `POST` | `/api/scan` | Executa uma varredura real da subnet (`targetSubnet`, `scanType: 'quick' \| 'full' \| 'ping_only'`, `forceNewDevice`). Retorna dispositivos, resumo e alertas. |
+| `POST` | `/api/scan/port` | Varre uma lista de portas TCP reais em um IP alvo (`ip`, `ports`). |
+| `GET` | `/api/nmap/status` | Retorna `{ available: boolean, version?: string }` — se o binário `nmap` foi encontrado no sistema. |
+| `POST` | `/api/nmap/exec` | Executa o `nmap` real com validação de flags/alvo (`command`, `targetIp`). Retorna 400 se o comando for rejeitado, 503 se `nmap` não estiver instalado. |
 | `POST` | `/api/devices/trust` | Marca/desmarca um dispositivo como confiável e atualiza apelido/notas (`mac`, `isTrusted`, `customName`, `deviceType`, `notes`). |
 | `GET` | `/api/alerts` | Lista os alertas gerados. |
 | `POST` | `/api/alerts/read` | Marca todos os alertas como lidos. |
@@ -377,11 +407,13 @@ Todos os endpoints são servidos pelo Express em `server.ts` sob o prefixo `/api
 
 ## Roadmap
 
-- [ ] Varredura ARP real da rede local (substituir mock de `/api/scan`)
-- [ ] Execução real do `nmap` via `child_process` com sanitização de input
-- [ ] Teste de velocidade real contra servidores de referência
-- [ ] Autenticação/login para proteger o painel em redes compartilhadas
-- [ ] Suporte a IPv6
+- [x] Varredura ARP real da rede local (substituiu o mock de `/api/scan`)
+- [x] Execução real do `nmap` via `child_process` com sanitização de input (whitelist de flags)
+- [x] Teste de velocidade real contra servidores de referência (Cloudflare)
+- [x] Autenticação/login para proteger o painel em redes compartilhadas
+- [x] Suporte a IPv6
+
+Veja [Limitações conhecidas](#como-funciona-por-baixo-dos-panos) para o que ainda não é 100% coberto em cada item (ex: Nmap sem root, cobertura best-effort de IPv6).
 
 ---
 

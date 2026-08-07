@@ -1,16 +1,18 @@
-import React, { useState } from 'react';
-import { 
-  Terminal, 
-  Play, 
-  Copy, 
-  Check, 
-  Trash2, 
-  HelpCircle, 
+import React, { useState, useEffect } from 'react';
+import {
+  Terminal,
+  Play,
+  Copy,
+  Check,
+  Trash2,
+  HelpCircle,
   Code,
   Sparkles,
-  Command
+  Command,
+  AlertTriangle
 } from 'lucide-react';
 import { ThemeMode } from '../types';
+import { apiFetch } from '../lib/apiClient';
 
 interface NmapTerminalProps {
   targetIp?: string;
@@ -27,6 +29,14 @@ export const NmapTerminal: React.FC<NmapTerminalProps> = ({
   const [terminalOutput, setTerminalOutput] = useState<string>(
     `# Nmap CLI Terminal - Linux Scanner Suite\n# Digite um comando Nmap abaixo ou selecione um dos atalhos pré-configurados:\n# Ex: nmap -sV -O -F 192.168.1.0/24\n`
   );
+  const [nmapStatus, setNmapStatus] = useState<{ available: boolean; version?: string } | null>(null);
+
+  useEffect(() => {
+    apiFetch('/api/nmap/status')
+      .then((res) => res.json())
+      .then((data) => setNmapStatus(data))
+      .catch(() => setNmapStatus({ available: false }));
+  }, []);
 
   const isLight = themeMode === 'light';
 
@@ -46,13 +56,18 @@ export const NmapTerminal: React.FC<NmapTerminalProps> = ({
     setTerminalOutput((prev) => prev + `\n$ ${finalCmd}\nExecutando varredura Nmap...\n`);
 
     try {
-      const res = await fetch('/api/nmap/exec', {
+      const res = await apiFetch('/api/nmap/exec', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: finalCmd, targetIp }),
       });
       const data = await res.json();
-      setTerminalOutput((prev) => prev + data.rawStdout + '\n');
+
+      if (!res.ok) {
+        setTerminalOutput((prev) => prev + `[ERRO ${res.status}]: ${data.error || 'Comando rejeitado.'}\n`);
+      } else {
+        setTerminalOutput((prev) => prev + data.rawStdout + '\n');
+      }
     } catch (err) {
       setTerminalOutput((prev) => prev + `[ERRO]: Falha ao executar Nmap: ${err}\n`);
     } finally {
@@ -116,6 +131,28 @@ export const NmapTerminal: React.FC<NmapTerminalProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Nmap availability / privilege banner */}
+      {nmapStatus && !nmapStatus.available && (
+        <div className={`flex items-start gap-2 px-4 py-3 rounded-xl border-2 text-xs font-bold ${
+          isLight ? 'bg-rose-50 border-rose-600 text-rose-900' : 'bg-rose-950/40 border-rose-800 text-rose-200'
+        }`}>
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            O binário <code>nmap</code> não foi encontrado neste sistema. Instale com <code>sudo apt install nmap</code> (ou equivalente da sua distro) para executar varreduras reais.
+          </span>
+        </div>
+      )}
+      {nmapStatus?.available && (
+        <div className={`flex items-start gap-2 px-4 py-2.5 rounded-xl border-2 text-[11px] font-semibold ${
+          isLight ? 'bg-amber-50 border-amber-500 text-amber-900' : 'bg-amber-950/30 border-amber-800 text-amber-200'
+        }`}>
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            Nmap {nmapStatus.version} disponível. Este servidor roda sem privilégios de root: a detecção de sistema operacional (<code>-O</code>) e alguns scans avançados retornam resultados parciais ou degradados.
+          </span>
+        </div>
+      )}
 
       {/* Terminal View Component */}
       <div className={`border-2 rounded-2xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-mono text-xs transition-colors ${

@@ -17,11 +17,13 @@ export const PingSparkline: React.FC<PingSparklineProps> = ({
   isLight = false,
   size = 'md',
 }) => {
+  const hasLatency = currentLatencyMs >= 0;
+
   // Ensure we have exactly 10 ping data points
   const chartData = useMemo(() => {
     let history = pingHistory;
     if (!history || history.length < 10) {
-      const baseMs = currentLatencyMs || 5;
+      const baseMs = hasLatency ? (currentLatencyMs || 5) : 5;
       const seed = ip.split('.').reduce((acc, part) => acc + parseInt(part, 10) || 0, 0);
       history = Array.from({ length: 10 }).map((_, i) => {
         const offset = Math.sin((i + seed) * 1.7) * Math.min(baseMs * 0.35, 6);
@@ -36,8 +38,8 @@ export const PingSparkline: React.FC<PingSparklineProps> = ({
     }));
   }, [pingHistory, currentLatencyMs, ip]);
 
-  const maxPing = Math.max(...chartData.map((d) => d.ping), currentLatencyMs);
-  const minPing = Math.min(...chartData.map((d) => d.ping), currentLatencyMs);
+  const maxPing = Math.max(...chartData.map((d) => d.ping), hasLatency ? currentLatencyMs : 0);
+  const minPing = Math.min(...chartData.map((d) => d.ping), hasLatency ? currentLatencyMs : Infinity);
   const avgPing = Math.round(
     chartData.reduce((acc, curr) => acc + curr.ping, 0) / chartData.length
   );
@@ -79,7 +81,7 @@ export const PingSparkline: React.FC<PingSparklineProps> = ({
       <div className="flex items-center gap-2 font-mono">
         <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-1.5 py-0.5 rounded border shrink-0 ${badgeClass}`}>
           <Zap className="w-3 h-3 fill-current" />
-          <span>{currentLatencyMs}ms</span>
+          <span>{hasLatency ? `${currentLatencyMs}ms` : '—'}</span>
         </span>
         
         <div className="w-16 h-6 shrink-0 relative border rounded border-slate-700/30 bg-slate-950/20 overflow-hidden">
@@ -115,7 +117,7 @@ export const PingSparkline: React.FC<PingSparklineProps> = ({
           </span>
         </div>
         <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${badgeClass}`}>
-          {currentLatencyMs} ms (méd {avgPing}ms)
+          {hasLatency ? `${currentLatencyMs} ms (méd ${avgPing}ms)` : `sem resposta ICMP (méd ${avgPing}ms)`}
         </span>
       </div>
 

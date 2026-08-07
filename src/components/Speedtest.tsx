@@ -1,19 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Zap, 
-  ArrowDownCircle, 
-  ArrowUpCircle, 
-  Activity, 
-  RefreshCw, 
-  Play, 
-  CheckCircle2, 
-  Wifi, 
-  Server, 
-  Clock, 
+import React, { useState, useRef } from 'react';
+import {
+  Zap,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  Activity,
+  RefreshCw,
+  Play,
+  CheckCircle2,
+  Wifi,
+  Server,
+  Clock,
   Globe,
-  Gauge
+  Gauge,
+  XCircle
 } from 'lucide-react';
 import { ThemeMode } from '../types';
+import { measurePing, measureDownload, measureUpload, isAbortError } from '../lib/speedtestEngine';
 
 interface SpeedtestProps {
   themeMode: ThemeMode;
@@ -41,6 +43,9 @@ export const Speedtest: React.FC<SpeedtestProps> = ({ themeMode }) => {
   const [jitter, setJitter] = useState<number | null>(null);
   const [download, setDownload] = useState<number | null>(null);
   const [upload, setUpload] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // History state
   const [history, setHistory] = useState<SpeedHistory[]>(() => {
@@ -81,79 +86,73 @@ export const Speedtest: React.FC<SpeedtestProps> = ({ themeMode }) => {
   const startSpeedTest = async () => {
     if (isRunning) return;
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsRunning(true);
+    setError(null);
     setStage('ping');
-    setProgress(10);
+    setProgress(5);
     setPing(null);
     setJitter(null);
     setDownload(null);
     setUpload(null);
 
-    // 1. Measure real server roundtrip latency (Ping & Jitter)
-    const startTime = performance.now();
     try {
-      await fetch('/api/network/interfaces');
-    } catch (e) {}
-    const endTime = performance.now();
-    const calculatedPing = Math.max(1, Math.round(endTime - startTime));
-    const calculatedJitter = Math.floor(Math.random() * 3) + 1;
-
-    setTimeout(() => {
-      setPing(calculatedPing);
-      setJitter(calculatedJitter);
+      // 1. Ping & Jitter (real, contra speed.cloudflare.com)
+      const { pingMs, jitterMs } = await measurePing(controller.signal);
+      setPing(pingMs);
+      setJitter(jitterMs);
       setStage('download');
-      setProgress(30);
+      setProgress(15);
 
-      // 2. Simulate / Measure Download Phase with animated gauge
-      let currentDl = 10;
-      const dlInterval = setInterval(() => {
-        currentDl += Math.floor(Math.random() * 45) + 15;
-        const targetDl = Math.min(650, currentDl);
-        setDownload(Number(targetDl.toFixed(1)));
-        setProgress((prev) => Math.min(70, prev + 5));
+      // 2. Download real, com progresso animado a partir de bytes recebidos
+      const finalDl = await measureDownload(controller.signal, (mbps) => {
+        setDownload(Number(mbps.toFixed(1)));
+        setProgress((prev) => Math.min(65, prev + 2));
+      });
+      setDownload(Number(finalDl.toFixed(1)));
+      setStage('upload');
+      setProgress(70);
 
-        if (currentDl >= 480) {
-          clearInterval(dlInterval);
-          const finalDl = Number((420 + Math.random() * 120).toFixed(1));
-          setDownload(finalDl);
-          setStage('upload');
-          setProgress(75);
+      // 3. Upload real, via XHR (único jeito de medir progresso de envio)
+      const finalUl = await measureUpload(controller.signal, (mbps) => {
+        setUpload(Number(mbps.toFixed(1)));
+        setProgress((prev) => Math.min(98, prev + 2));
+      });
+      setUpload(Number(finalUl.toFixed(1)));
+      setStage('complete');
+      setProgress(100);
 
-          // 3. Measure Upload Phase
-          let currentUl = 5;
-          const ulInterval = setInterval(() => {
-            currentUl += Math.floor(Math.random() * 30) + 10;
-            const targetUl = Math.min(350, currentUl);
-            setUpload(Number(targetUl.toFixed(1)));
-            setProgress((prev) => Math.min(95, prev + 3));
+      let rating = 'Excelente';
+      if (finalDl < 25) rating = 'Regular';
+      else if (finalDl < 100) rating = 'Boa';
 
-            if (currentUl >= 260) {
-              clearInterval(ulInterval);
-              const finalUl = Number((240 + Math.random() * 80).toFixed(1));
-              setUpload(finalUl);
-              setStage('complete');
-              setProgress(100);
-              setIsRunning(false);
+      saveToHistory({
+        id: Date.now().toString(),
+        timestamp: new Date().toLocaleString('pt-BR'),
+        pingMs,
+        jitterMs,
+        downloadMbps: Number(finalDl.toFixed(1)),
+        uploadMbps: Number(finalUl.toFixed(1)),
+        rating
+      });
+    } catch (err) {
+      if (isAbortError(err)) {
+        setStage('idle');
+        setProgress(0);
+      } else {
+        setError('Não foi possível completar o teste de velocidade. Verifique sua conexão com a internet.');
+        setStage('idle');
+      }
+    } finally {
+      setIsRunning(false);
+      abortControllerRef.current = null;
+    }
+  };
 
-              // Rating calculation
-              let rating = 'Excelente';
-              if (finalDl < 50) rating = 'Regular';
-              else if (finalDl < 150) rating = 'Boa';
-
-              saveToHistory({
-                id: Date.now().toString(),
-                timestamp: new Date().toLocaleString('pt-BR'),
-                pingMs: calculatedPing,
-                jitterMs: calculatedJitter,
-                downloadMbps: finalDl,
-                uploadMbps: finalUl,
-                rating
-              });
-            }
-          }, 150);
-        }
-      }, 150);
-    }, 1000);
+  const cancelSpeedTest = () => {
+    abortControllerRef.current?.abort();
   };
 
   return (
@@ -175,33 +174,54 @@ export const Speedtest: React.FC<SpeedtestProps> = ({ themeMode }) => {
               </span>
             </h2>
             <p className={`text-xs mt-0.5 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-              Meça latência em tempo real (Ping/Jitter), taxa de Download e Upload da sua conexão de rede local e internet.
+              Meça latência real (Ping/Jitter), taxa de Download e Upload da sua conexão com a internet contra a rede da Cloudflare. Consome algumas dezenas de MB por teste.
             </p>
           </div>
         </div>
 
-        <button
-          onClick={startSpeedTest}
-          disabled={isRunning}
-          className={`px-5 py-2.5 text-xs font-extrabold rounded-xl border-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2 transition-all hover:-translate-y-0.5 active:translate-y-0 ${
-            isRunning
-              ? 'bg-amber-500 text-slate-950 border-slate-900 cursor-not-allowed'
-              : 'bg-emerald-600 hover:bg-emerald-500 text-white border-slate-900'
-          }`}
-        >
-          {isRunning ? (
-            <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>Testando Velocidade... ({progress}%)</span>
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4 fill-current" />
-              <span>Iniciar Teste de Velocidade</span>
-            </>
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <button
+              onClick={cancelSpeedTest}
+              className="px-3 py-2.5 text-xs font-extrabold rounded-xl border-2 border-slate-900 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-1.5 transition-all hover:-translate-y-0.5 active:translate-y-0 bg-rose-600 hover:bg-rose-500 text-white"
+              title="Cancelar teste"
+            >
+              <XCircle className="w-4 h-4" />
+              <span>Cancelar</span>
+            </button>
           )}
-        </button>
+          <button
+            onClick={startSpeedTest}
+            disabled={isRunning}
+            className={`px-5 py-2.5 text-xs font-extrabold rounded-xl border-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2 transition-all hover:-translate-y-0.5 active:translate-y-0 ${
+              isRunning
+                ? 'bg-amber-500 text-slate-950 border-slate-900 cursor-not-allowed'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white border-slate-900'
+            }`}
+          >
+            {isRunning ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Testando Velocidade... ({progress}%)</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4 fill-current" />
+                <span>Iniciar Teste de Velocidade</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div className={`px-4 py-3 rounded-xl border-2 text-xs font-bold flex items-center justify-between gap-3 ${
+          isLight ? 'bg-rose-50 border-rose-600 text-rose-900' : 'bg-rose-950/40 border-rose-800 text-rose-200'
+        }`}>
+          <span>⚠️ {error}</span>
+          <button onClick={() => setError(null)} className="underline shrink-0">Fechar</button>
+        </div>
+      )}
 
       {/* Main Meter Dashboard */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -306,8 +326,8 @@ export const Speedtest: React.FC<SpeedtestProps> = ({ themeMode }) => {
               isLight ? 'bg-slate-50 border-slate-900' : 'bg-slate-950 border-slate-800'
             }`}>
               <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Servidor</span>
-              <span className="text-xs font-extrabold font-mono text-slate-300 block truncate">
-                Local Gateway
+              <span className="text-xs font-extrabold font-mono text-slate-300 block truncate" title="speed.cloudflare.com">
+                Cloudflare
               </span>
             </div>
 

@@ -13,7 +13,8 @@ import {
   Radio,
   Sliders,
   Sun,
-  Moon
+  Moon,
+  LogOut
 } from 'lucide-react';
 import { NetworkInterfaceInfo, NetworkAlert, ScanConfig, ThemeConfig } from '../types';
 
@@ -31,6 +32,7 @@ interface HeaderProps {
   themeConfig: ThemeConfig;
   onToggleThemeMode: () => void;
   onOpenSettings: () => void;
+  onLogout: () => void;
   accentBgClass: string;
 }
 
@@ -48,6 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
   themeConfig,
   onToggleThemeMode,
   onOpenSettings,
+  onLogout,
   accentBgClass,
 }) => {
   const [showAlertsDropdown, setShowAlertsDropdown] = useState(false);
@@ -230,6 +233,17 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Sliders className="w-4 h-4" />
+            </button>
+
+            {/* Logout button */}
+            <button
+              onClick={onLogout}
+              title="Sair"
+              className={`h-9 w-9 flex items-center justify-center rounded-xl border-2 text-xs font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all hover:-translate-y-0.5 ${
+                isLight ? 'bg-slate-100 border-slate-900 text-rose-700 hover:bg-rose-50' : 'bg-slate-800 border-slate-700 text-rose-400 hover:bg-slate-700'
+              }`}
+            >
+              <LogOut className="w-4 h-4" />
             </button>
 
             {/* Scan Buttons with Uniform h-9 Height */}

@@ -32,6 +32,7 @@ import {
   Legend 
 } from 'recharts';
 import { Device, SecurityAdvice, TimelineDataPoint, ThemeMode, NetworkEventLog } from '../types';
+import { apiFetch } from '../lib/apiClient';
 import { playAlertSound } from '../lib/audioAlert';
 
 interface SecurityAdvisorProps {
@@ -225,7 +226,7 @@ export const SecurityAdvisor: React.FC<SecurityAdvisorProps> = ({
   const fetchSecurityAnalysis = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/security/ai-analysis', {
+      const res = await apiFetch('/api/security/ai-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ devices }),
@@ -241,7 +242,7 @@ export const SecurityAdvisor: React.FC<SecurityAdvisorProps> = ({
 
   const fetchTimeline = async () => {
     try {
-      const res = await fetch('/api/history/timeline');
+      const res = await apiFetch('/api/history/timeline');
       const data = await res.json();
       if (data.timeline) {
         setTimelineData(data.timeline);
@@ -253,7 +254,7 @@ export const SecurityAdvisor: React.FC<SecurityAdvisorProps> = ({
 
   const fetchEventLogs = async () => {
     try {
-      const res = await fetch('/api/history/events');
+      const res = await apiFetch('/api/history/events');
       const data = await res.json();
       if (data.events) {
         setEventLogs(data.events);
@@ -266,7 +267,7 @@ export const SecurityAdvisor: React.FC<SecurityAdvisorProps> = ({
   const handleClearEvents = async () => {
     if (!window.confirm("Tem certeza que deseja limpar o histórico textual de eventos de auditoria?")) return;
     try {
-      await fetch('/api/history/events', { method: 'DELETE' });
+      await apiFetch('/api/history/events', { method: 'DELETE' });
       setEventLogs([]);
     } catch (err) {
       console.error("Error clearing event logs:", err);

@@ -54,7 +54,10 @@ export const DeviceList: React.FC<DeviceListProps> = ({
   const totalOpenPorts = devices.reduce((acc, dev) => acc + dev.openPorts.length, 0);
   const untrustedCount = devices.filter((d) => !d.isTrusted).length;
   const highRiskCount = devices.filter((d) => d.riskLevel === 'high' || d.riskLevel === 'critical').length;
-  const avgLatency = devices.length ? Math.round(devices.reduce((acc, dev) => acc + dev.latencyMs, 0) / devices.length) : 0;
+  const devicesWithLatency = devices.filter((d) => d.latencyMs >= 0);
+  const avgLatency = devicesWithLatency.length
+    ? Math.round(devicesWithLatency.reduce((acc, dev) => acc + dev.latencyMs, 0) / devicesWithLatency.length)
+    : 0;
 
   // Filtering
   const filteredDevices = devices.filter((dev) => {

@@ -13,6 +13,7 @@ import {
   Info
 } from 'lucide-react';
 import { OpenPort, RiskLevel, ThemeMode } from '../types';
+import { apiFetch } from '../lib/apiClient';
 
 interface PortScannerViewProps {
   defaultIp?: string;
@@ -71,7 +72,7 @@ export const PortScannerView: React.FC<PortScannerViewProps> = ({
     }
 
     try {
-      const res = await fetch('/api/scan/port', {
+      const res = await apiFetch('/api/scan/port', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ip: targetIp, ports: portsToScan }),
